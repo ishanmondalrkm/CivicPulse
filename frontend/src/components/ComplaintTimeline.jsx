@@ -24,7 +24,7 @@ export default function ComplaintTimeline({ complaint }) {
             <span className="text-xs font-mono font-bold text-blue-700 bg-blue-100 px-2 py-0.5 rounded">
               {complaint.complaint_number}
             </span>
-            <span
+             <span
               className={`text-xs font-semibold px-2 py-0.5 rounded ${
                 complaint.priority === 'High' || complaint.priority === 'Critical'
                   ? 'bg-red-100 text-red-700'

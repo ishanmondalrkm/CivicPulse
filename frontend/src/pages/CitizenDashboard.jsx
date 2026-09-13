@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import axios from 'axios';
 import {
@@ -25,12 +25,13 @@ import {
   Check
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import MapPicker from '../components/MapPicker';
+import CitizenLocationPicker from './CitizenLocationPicker';
 import VoiceInput from '../components/VoiceInput';
 import ComplaintTimeline from '../components/ComplaintTimeline';
 
 export default function CitizenDashboard() {
-  const { user, logout, API_URL } = useAuth();
+  const { user, logout } = useAuth();
+  const API_URL = process.env.REACT_APP_BACKEND_URL || 'http://localhost:8001';
   const { loading: authLoading } = useAuth();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -43,10 +44,16 @@ export default function CitizenDashboard() {
 
   // Complaint Form State
   const [category, setCategory] = useState(searchParams.get('category') || 'Roads');
-  const [priority, setPriority] = useState('High');
   const [description, setDescription] = useState('');
   const [title, setTitle] = useState('');
   const [photoUrl, setPhotoUrl] = useState('');
+  const [imageAuthenticity, setImageAuthenticity] = useState(null);
+  const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
+  const [cameraOpen, setCameraOpen] = useState(false);
+  const [cameraError, setCameraError] = useState('');
+  const videoRef = useRef(null);
+  const cameraStreamRef = useRef(null);
+  const fileInputRef = useRef(null);
   const [voiceTranscript, setVoiceTranscript] = useState('');
   const [location, setLocation] = useState({
     latitude: 12.9784,
@@ -102,6 +109,111 @@ export default function CitizenDashboard() {
     fetchCitizenData();
   }, [user, authLoading, navigate]);
 
+  const stopCamera = () => {
+    if (cameraStreamRef.current) {
+      cameraStreamRef.current.getTracks().forEach((track) => track.stop());
+      cameraStreamRef.current = null;
+    }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+    setCameraOpen(false);
+  };
+
+  const startCamera = async () => {
+    setCameraError('');
+    try {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        throw new Error('Live camera access is not supported by this browser.');
+      }
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: { ideal: 'environment' },
+          width: { ideal: 1280 },
+          height: { ideal: 720 }
+        },
+        audio: false
+      });
+      cameraStreamRef.current = stream;
+      setCameraOpen(true);
+      requestAnimationFrame(() => {
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          videoRef.current.play().catch(() => {});
+        }
+      });
+    } catch (err) {
+      console.error('Camera error:', err);
+      setCameraError(err?.message || 'Could not access the camera. Please allow camera permission.');
+    }
+  };
+
+  const uploadEvidenceFile = async (file) => {
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      alert('Please select an image file.');
+      return;
+    }
+
+    setIsUploadingPhoto(true);
+    setImageAuthenticity(null);
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      const res = await axios.post(`${API_URL}/api/uploads/complaint-photo`, formData, {
+        withCredentials: true,
+        headers: { 'Content-Type': 'multipart/form-data' }
+      });
+      setPhotoUrl(res.data.photo_url);
+      setImageAuthenticity(res.data.image_authenticity || null);
+    } catch (err) {
+      console.error('Photo upload/AI screening error:', err);
+      alert(err.response?.data?.detail || 'The photo could not be uploaded or AI-verified. Please try another image.');
+      setPhotoUrl('');
+      setImageAuthenticity(null);
+    } finally {
+      setIsUploadingPhoto(false);
+    }
+  };
+
+  const handleFileSelected = (event) => {
+    const file = event.target.files?.[0];
+    if (file) uploadEvidenceFile(file);
+    event.target.value = '';
+  };
+
+  const capturePhoto = async () => {
+    const video = videoRef.current;
+    if (!video || video.readyState < 2) {
+      setCameraError('Camera is not ready yet.');
+      return;
+    }
+
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth || 1280;
+    canvas.height = video.videoHeight || 720;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+    canvas.toBlob(async (blob) => {
+      if (!blob) {
+        setCameraError('Could not capture the photo.');
+        return;
+      }
+      const file = new File([blob], `civicpulse-camera-${Date.now()}.jpg`, { type: 'image/jpeg' });
+      stopCamera();
+      await uploadEvidenceFile(file);
+    }, 'image/jpeg', 0.92);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (cameraStreamRef.current) {
+        cameraStreamRef.current.getTracks().forEach((track) => track.stop());
+      }
+    };
+  }, []);
+
   // Trigger AI Auto Analysis when description is updated or voice provided
   const handleLiveAIAnalysis = async (textToAnalyze) => {
     const txt = textToAnalyze || description;
@@ -115,7 +227,6 @@ export default function CitizenDashboard() {
       if (res.data && res.data.analysis) {
         setAiAnalysis(res.data.analysis);
         if (res.data.analysis.category) setCategory(res.data.analysis.category);
-        if (res.data.analysis.priority) setPriority(res.data.analysis.priority);
       }
     } catch (e) {
       // ignore
@@ -144,11 +255,11 @@ export default function CitizenDashboard() {
     try {
       const payload = {
         category,
-        priority,
         title: title || `${category} issue in ${location.ward || 'Area'}`,
         description,
         voice_transcript: voiceTranscript,
-        photo_url: photoUrl || 'https://images.unsplash.com/photo-1651129520737-7137123b7611?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDQ2NDF8MHwxfHNlYXJjaHw0fHxjaXRpemVuJTIwcmVwb3J0aW5nJTIwbW9iaWxlJTIwYXBwJTIwZGFzaGJvYXJkfGVufDB8fHx8MTc4NzI4NzEwM3ww&ixlib=rb-4.1.0&q=85',
+        photo_url: photoUrl || null,
+        image_authenticity: imageAuthenticity,
         location
       };
 
@@ -167,6 +278,7 @@ export default function CitizenDashboard() {
         setTitle('');
         setVoiceTranscript('');
         setPhotoUrl('');
+        setImageAuthenticity(null);
         setAiAnalysis(null);
         setDuplicateWarning(null);
         fetchCitizenData();
@@ -475,19 +587,14 @@ export default function CitizenDashboard() {
                     </select>
                   </div>
 
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1.5">Priority</label>
-                    <select
-                      value={priority}
-                      onChange={(e) => setPriority(e.target.value)}
-                      data-testid="complaint-priority-select"
-                      className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-xs font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    >
-                      <option value="High">High</option>
-                      <option value="Medium">Medium</option>
-                      <option value="Low">Low</option>
-                      <option value="Critical">Critical</option>
-                    </select>
+                  <div className="rounded-xl border border-blue-100 bg-blue-50/70 px-4 py-3">
+                    <div className="flex items-center gap-2">
+                      <Sparkles className="h-4 w-4 text-blue-600" />
+                      <span className="text-xs font-bold text-blue-800">AI Priority — Citizen cannot choose</span>
+                    </div>
+                    <p className="text-[11px] text-blue-700 mt-1 leading-relaxed">
+                      Priority is calculated automatically from safety severity, nearby critical infrastructure, and the number of active complaints around this location.
+                    </p>
                   </div>
                 </div>
 
@@ -545,7 +652,7 @@ export default function CitizenDashboard() {
                 {/* Map & Photo Grid */}
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 pt-2">
                   {/* Location Picker */}
-                  <MapPicker location={location} onChange={setLocation} />
+                  <CitizenLocationPicker location={location} onChange={setLocation} />
 
                   {/* Photo Evidence */}
                   <div className="space-y-3">
@@ -555,40 +662,115 @@ export default function CitizenDashboard() {
                     </div>
 
                     <div className="border border-slate-200 rounded-xl p-4 bg-slate-50 space-y-3">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          onClick={startCamera}
+                          disabled={isUploadingPhoto}
+                          data-testid="open-live-camera-btn"
+                          className="inline-flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg bg-blue-600 text-white text-xs font-bold hover:bg-blue-700 disabled:opacity-50"
+                        >
+                          <Camera className="h-4 w-4" />
+                          Open Live Camera
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => fileInputRef.current?.click()}
+                          disabled={isUploadingPhoto}
+                          data-testid="upload-photo-btn"
+                          className="inline-flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg bg-white border border-slate-300 text-slate-700 text-xs font-bold hover:bg-slate-100 disabled:opacity-50"
+                        >
+                          <Camera className="h-4 w-4" />
+                          Upload a Photo
+                        </button>
+                      </div>
+
                       <input
+                        ref={fileInputRef}
                         type="file"
-                        accept="image/*"
+                        accept="image/jpeg,image/png,image/webp"
+                        capture="environment"
                         data-testid="photo-evidence-file-input"
-                        onChange={(e) => {
-                          const file = e.target.files?.[0];
-                          if (file) {
-                            const url = URL.createObjectURL(file);
-                            setPhotoUrl(url);
-                          }
-                        }}
-                        className="text-xs text-slate-500 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 cursor-pointer w-full"
+                        onChange={handleFileSelected}
+                        className="hidden"
                       />
 
+                      {isUploadingPhoto && (
+                        <div className="rounded-lg border border-blue-100 bg-blue-50 p-3 text-xs text-blue-800 font-semibold">
+                          Uploading photo and running AI authenticity screening…
+                        </div>
+                      )}
+
+                      {cameraError && (
+                        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+                          {cameraError}
+                        </div>
+                      )}
+
+                      {cameraOpen && (
+                        <div className="fixed inset-0 z-[100] bg-black/80 flex items-center justify-center p-4">
+                          <div className="w-full max-w-2xl bg-white rounded-2xl overflow-hidden shadow-2xl">
+                            <div className="flex items-center justify-between px-4 py-3 border-b border-slate-200">
+                              <div>
+                                <h4 className="text-sm font-bold text-slate-900">Live Camera</h4>
+                                <p className="text-[11px] text-slate-500">Point the camera at the civic issue and capture a clear photo.</p>
+                              </div>
+                              <button type="button" onClick={stopCamera} className="p-2 rounded-full hover:bg-slate-100">
+                                <X className="h-4 w-4" />
+                              </button>
+                            </div>
+                            <div className="bg-black aspect-video">
+                              <video ref={videoRef} autoPlay muted playsInline className="w-full h-full object-contain" />
+                            </div>
+                            <div className="p-4 flex justify-center gap-2">
+                              <button type="button" onClick={stopCamera} className="px-4 py-2 rounded-lg border border-slate-300 text-xs font-bold text-slate-700">Cancel</button>
+                              <button type="button" onClick={capturePhoto} className="inline-flex items-center gap-2 px-5 py-2 rounded-lg bg-blue-600 text-white text-xs font-bold hover:bg-blue-700">
+                                <Camera className="h-4 w-4" /> Capture & Verify
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
                       {photoUrl ? (
-                        <div className="relative rounded-lg overflow-hidden h-32 bg-slate-200 border border-slate-300">
-                          <img src={photoUrl} alt="Complaint preview" className="w-full h-full object-cover" />
-                          <button
-                            type="button"
-                            onClick={() => setPhotoUrl('')}
-                            className="absolute top-2 right-2 bg-black/60 text-white rounded-full p-1 hover:bg-black/80"
-                          >
-                            <X className="h-3 w-3" />
-                          </button>
+                        <div className="space-y-2">
+                          <div className="relative rounded-lg overflow-hidden h-40 bg-slate-200 border border-slate-300">
+                            <img src={photoUrl} alt="Complaint evidence" className="w-full h-full object-cover" />
+                            <button
+                              type="button"
+                              onClick={() => { setPhotoUrl(''); setImageAuthenticity(null); }}
+                              className="absolute top-2 right-2 bg-black/60 text-white rounded-full p-1 hover:bg-black/80"
+                            >
+                              <X className="h-3 w-3" />
+                            </button>
+                          </div>
+
+                          {imageAuthenticity && (
+                            <div className={`rounded-lg border p-3 text-[11px] ${
+                              imageAuthenticity.label === 'LIKELY_REAL'
+                                ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                                : imageAuthenticity.label === 'LIKELY_AI_GENERATED'
+                                ? 'border-red-200 bg-red-50 text-red-800'
+                                : 'border-amber-200 bg-amber-50 text-amber-800'
+                            }`}>
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="font-bold">AI Authenticity Screen: {imageAuthenticity.label.replaceAll('_', ' ')}</span>
+                                <span>{Math.round((imageAuthenticity.confidence || 0) * 100)}% confidence</span>
+                              </div>
+                              <p className="mt-1">{imageAuthenticity.reason}</p>
+                              <p className="mt-1 opacity-75">This is an AI screening signal, not forensic proof.</p>
+                            </div>
+                          )}
                         </div>
                       ) : (
                         <div className="text-center py-4 text-slate-400 text-xs">
-                          No photo selected. You can attach JPEG/PNG photo of the issue.
+                          No photo selected. You can take a live camera photo or upload JPEG/PNG/WebP evidence.
                         </div>
                       )}
                     </div>
                   </div>
                 </div>
-
                 {/* Form Submit Button */}
                 <div className="flex justify-end pt-4 border-t border-slate-100">
                   <button

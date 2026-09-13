@@ -178,8 +178,8 @@ export default function MapPicker({ location, onChange }) {
             position.coords.accuracy
           );
 
-          const gpsAddress =
-            `GPS Location: ${newLat}, ${newLng}`;
+         const gpsAddress =
+  `GPS: ${newLat}, ${newLng} | Accuracy: ${accuracy}m`;
 
           // Update map coordinates
           setLat(newLat);

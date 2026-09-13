@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import {
@@ -35,7 +35,8 @@ import {
 import { useAuth } from '../context/AuthContext';
 
 export default function AdminDashboard() {
-  const { user, logout, API_URL } = useAuth();
+  const { user, logout } = useAuth();
+  const API_URL = process.env.REACT_APP_BACKEND_URL || 'http://localhost:8001';
   const { loading: authLoading } = useAuth();
   const navigate = useNavigate();
 
@@ -67,6 +68,7 @@ export default function AdminDashboard() {
   const [modalRemarks, setModalRemarks] = useState('');
   const [modalNotes, setModalNotes] = useState('');
   const [modalProofPhoto, setModalProofPhoto] = useState('');
+  const [modalProofAI, setModalProofAI] = useState(null);
   const [isUpdating, setIsUpdating] = useState(false);
   const [updateSuccess, setUpdateSuccess] = useState(false);
 
@@ -147,17 +149,37 @@ export default function AdminDashboard() {
     setModalRemarks('');
     setModalNotes(complaint.internal_notes || '');
     setModalProofPhoto('');
+    setModalProofAI(null);
     setUpdateSuccess(false);
   };
 
-  const handleProofPhotoChange = (e) => {
+  const handleProofPhotoChange = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      setModalProofPhoto(reader.result);
-    };
-    reader.readAsDataURL(file);
+    if (!file.type.startsWith('image/')) {
+      alert('Please select an image file.');
+      return;
+    }
+    try {
+      setIsUpdating(true);
+      const formData = new FormData();
+      formData.append('file', file);
+      const res = await axios.post(`${API_URL}/api/uploads/complaint-photo`, formData, {
+        withCredentials: true,
+        headers: { 'Content-Type': 'multipart/form-data' }
+      });
+      setModalProofPhoto(res.data.photo_url || '');
+      setModalProofAI(res.data.image_authenticity || null);
+      if (res.data.image_authenticity?.label === 'LIKELY_AI_GENERATED') {
+        alert('AI authenticity screening flagged this proof photo as likely AI-generated. Please upload an authentic site photograph.');
+      }
+    } catch (err) {
+      setModalProofPhoto('');
+      setModalProofAI(null);
+      alert(err.response?.data?.detail || 'Could not upload or AI-screen the proof photo.');
+    } finally {
+      setIsUpdating(false);
+    }
   };
 
   const handleUpdateComplaintStatus = async (e) => {
@@ -168,6 +190,10 @@ export default function AdminDashboard() {
       alert(`Please attach a proof-of-work photo when marking the complaint as ${modalStatus}.`);
       return;
     }
+    if ((modalStatus === 'IN PROGRESS' || modalStatus === 'RESOLVED') && modalProofAI?.label === 'LIKELY_AI_GENERATED') {
+      alert('The proof photo was flagged as likely AI-generated. Upload a genuine site photograph before changing the complaint to this status.');
+      return;
+    }
     setIsUpdating(true);
     try {
       const payload = {
@@ -176,7 +202,8 @@ export default function AdminDashboard() {
         assigned_officer: modalOfficer,
         remarks: modalRemarks || `Status changed to ${modalStatus} by Administrator`,
         internal_notes: modalNotes,
-        proof_photo_url: modalProofPhoto || undefined
+        proof_photo_url: modalProofPhoto || undefined,
+        proof_photo_ai_verification: modalProofAI || undefined
       };
 
       const res = await axios.patch(
@@ -218,21 +245,27 @@ export default function AdminDashboard() {
   });
 
   // Priority queue subset (matching Screenshot 1)
-  const priorityQueue = complaints.filter((c) => c.priority === 'High' || c.priority === 'Critical');
+  const priorityQueue = [...complaints].sort((a, b) => {
+    const order = { Critical: 0, High: 1, Medium: 2, Low: 3 };
+    return (order[a.priority] ?? 4) - (order[b.priority] ?? 4) || new Date(a.created_at || 0) - new Date(b.created_at || 0);
+  });
 
-  // Monthly Activity Bars (matching Screenshot 1)
-  const monthlyData = [
-    { month: 'Jan', height: '40%' },
-    { month: 'Feb', height: '55%' },
-    { month: 'Mar', height: '45%' },
-    { month: 'Apr', height: '65%' },
-    { month: 'May', height: '50%' },
-    { month: 'Jun', height: '80%' },
-    { month: 'Jul', height: '60%' },
-    { month: 'Aug', height: '70%' },
-    { month: 'Sep', height: '90%' },
-    { month: 'Oct', height: '65%' }
-  ];
+  // Real complaint activity for the last 10 calendar months.
+  const monthlyData = useMemo(() => {
+    const now = new Date();
+    const buckets = Array.from({ length: 10 }, (_, i) => {
+      const d = new Date(now.getFullYear(), now.getMonth() - (9 - i), 1);
+      return { key: `${d.getFullYear()}-${d.getMonth()}`, month: d.toLocaleString('en-US', { month: 'short' }), count: 0 };
+    });
+    complaints.forEach((c) => {
+      const d = new Date(c.created_at);
+      if (Number.isNaN(d.getTime())) return;
+      const bucket = buckets.find((b) => b.key === `${d.getFullYear()}-${d.getMonth()}`);
+      if (bucket) bucket.count += 1;
+    });
+    const max = Math.max(1, ...buckets.map((b) => b.count));
+    return buckets.map((b) => ({ ...b, height: `${Math.max(8, Math.round((b.count / max) * 100))}%` }));
+  }, [complaints]);
 
   if (authLoading) {
     return (
@@ -485,8 +518,8 @@ export default function AdminDashboard() {
                       <span className="text-xs font-mono font-bold text-blue-700">
                         {c.complaint_number}
                       </span>
-                      <span className="px-2 py-0.5 bg-red-100 text-red-700 rounded-full text-[10px] font-extrabold uppercase">
-                        HIGH
+                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold uppercase ${c.priority === 'Critical' ? 'bg-red-100 text-red-700' : c.priority === 'High' ? 'bg-orange-100 text-orange-700' : 'bg-amber-100 text-amber-700'}`}>
+                        {c.priority || 'Medium'}
                       </span>
                     </div>
                     <p className="text-xs font-semibold text-slate-800 line-clamp-1">{c.title}</p>
@@ -1070,6 +1103,14 @@ export default function AdminDashboard() {
                     </span>
                   </div>
                 )}
+                {modalProofAI && (
+                  <div className={`rounded-lg border p-2.5 text-[11px] ${modalProofAI.label === 'LIKELY_REAL' ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : modalProofAI.label === 'LIKELY_AI_GENERATED' ? 'bg-red-50 border-red-200 text-red-800' : 'bg-amber-50 border-amber-200 text-amber-800'}`}>
+                    <div className="font-bold">AI Authenticity Screen: {String(modalProofAI.label || 'UNCERTAIN').replaceAll('_', ' ')}</div>
+                    <div>{Math.round((modalProofAI.confidence || 0) * 100)}% confidence</div>
+                    {modalProofAI.reason && <div className="mt-1">{modalProofAI.reason}</div>}
+                  </div>
+                )}
+
                 {(modalStatus === 'IN PROGRESS' || modalStatus === 'RESOLVED') && !modalProofPhoto && (
                   <p className="text-[11px] text-amber-700 font-medium">
                     ⚠ A proof photo is required to broadcast a {modalStatus} update to the citizen.

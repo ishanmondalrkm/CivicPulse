@@ -135,23 +135,10 @@ export default function LandingPage() {
               </div>
               <div className="pt-6 border-t border-blue-700/50">
                 <span className="text-xs font-semibold text-blue-200 block mb-2.5">
-                  ⚡ SIH Evaluator 1-Click Demo Portals:
+                  
                 </span>
                 <div className="flex flex-wrap items-center gap-2.5">
-                  <button
-                    onClick={() => handleQuickLogin('citizen')}
-                    data-testid="demo-login-citizen-btn"
-                    className="px-3 py-1.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-500 rounded-lg border border-blue-400/40 shadow-sm transition-all"
-                  >
-                    Citizen Login (Ramesh Sharma)
-                  </button>
-                  <button
-                    onClick={() => handleQuickLogin('admin')}
-                    data-testid="demo-login-admin-btn"
-                    className="px-3 py-1.5 text-xs font-semibold text-white bg-slate-700 hover:bg-slate-600 rounded-lg border border-slate-500/40 shadow-sm transition-all"
-                  >
-                    Admin Portal (Director Anjali)
-                  </button>
+                 
                   <button
                     onClick={() => handleQuickLogin('dev')}
                     data-testid="demo-login-dev-btn"
@@ -352,19 +339,7 @@ export default function LandingPage() {
             <div className="p-4 bg-amber-50 border border-amber-200 text-amber-800 rounded-xl text-xs max-w-xl mx-auto">
               <p className="font-semibold">{trackError}</p>
               <div className="mt-2 flex gap-2">
-                <button
-                  onClick={() => handleQuickLogin('citizen')}
-                  className="underline font-bold text-blue-700"
-                >
-                  Login as Citizen
-                </button>
-                <span>or</span>
-                <button
-                  onClick={() => handleQuickLogin('admin')}
-                  className="underline font-bold text-blue-700"
-                >
-                  Login as Admin
-                </button>
+               
               </div>
             </div>
           )}
